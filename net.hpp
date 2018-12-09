@@ -84,9 +84,9 @@ class TransportPacket
 
     enum class TRANSPORT_PRIORITY : uint8_t
     {
-        HIGH = 0x01,
+        HIGH = 0x03,
         MEDIUM = 0x02,
-        LOW = 0x03
+        LOW = 0x01
     };
 
     // transport header fields stored in network order
@@ -130,6 +130,7 @@ class TransportPacket
     TransportPacket(const TransportPacket&) = delete;
     TransportPacket& operator=(const TransportPacket&) = delete;
     TransportPacket(TransportPacket&&) = default;
+    TransportPacket& operator=(TransportPacket&&) = default;
 
     private:
 
