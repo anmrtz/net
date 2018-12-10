@@ -190,45 +190,11 @@ int main(int argc, char * argv[])
     std::vector<uint8_t> data_vector((std::istreambuf_iterator<char>(data_file)), 
         std::istreambuf_iterator<char>());
 
-    // UDP non-blocking recieve
-    const net::sock_fd recv_sock_fd(socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0));
-    net::set_buffer_size(recv_sock_fd.get());
-    if (recv_sock_fd.get() < 0)
-    {
-        std::cerr << "Could not initialize sender receive socket\n";
-        return -1;
-    }
-    else
-    {
-        std::cerr << "Initialized sender receive socket: " << recv_sock_fd.get() << '\n';
-    }
+    auto recv_fd_addr = net::bind_recv_local(sender_port);
+    const auto & recv_sock_fd = recv_fd_addr.first;
+    const auto & sender_addr = recv_fd_addr.second;
 
-    // initialize requester packet waiting...
-    sockaddr_in sender_recv_addr;
-    memset(&sender_recv_addr, 0, sizeof(sockaddr_in));
-    sender_recv_addr.sin_family = AF_INET;
-    sender_recv_addr.sin_port = htons(sender_port);
-
-    // get local machine IP
-    char local_hostname[128]{0};
-    if (gethostname(local_hostname, sizeof(local_hostname)))
-    {
-        std::cerr << "gethostname error\n";
-        return -1;
-    }
-    std::cout << "Resolved machine name: " << local_hostname << '\n';
-    hostent *ent = gethostbyname(local_hostname);
-    in_addr host_addr = *(in_addr*)ent->h_addr;
-    delete ent;
-    std::cout << "Resolved machine ip: " << inet_ntoa(host_addr) << '\n';
-    sender_recv_addr.sin_addr.s_addr = host_addr.s_addr;
-    const sockaddr & sender_addr = *(sockaddr*)&sender_recv_addr;
-
-    if (bind(recv_sock_fd.get(),(sockaddr*)&sender_recv_addr,sizeof(sender_recv_addr)) == -1)
-    {
-        std::cerr << "Could not bind sender receive socket: " << recv_sock_fd.get() << '\n';
-        return -1;
-    }
+    std::cerr << net::sockaddr_to_str(sender_addr) << "; " << recv_sock_fd.get() << '\n';
 
     // initialize blocking UDP send socket
     const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
@@ -332,7 +298,6 @@ int main(int argc, char * argv[])
         // account for timeout
         else if (is_request_pending && most_recent_packet_time + net::SENDER_RECV_TIMEOUT < std::chrono::system_clock::now())
         {
-            std::cerr << "Timeout!\n";
             if (++timeout_count > net::MAX_TIMEOUT_COUNT)
             {
                 std::cerr << "Sender timed out waiting for response\n";

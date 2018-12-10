@@ -10,6 +10,8 @@
 #include <set>
 #include <memory>
 #include <chrono>
+#include <utility>
+#include <iostream>
 
 namespace net
 {
@@ -39,7 +41,18 @@ class sock_fd
     {}
 
     sock_fd(const sock_fd &) = delete;
-    sock_fd& operator=(sock_fd &) = delete;
+    sock_fd& operator=(const sock_fd &) = delete;
+    sock_fd(sock_fd && right)
+    {
+        fd = right.fd;
+        right.fd = -1;
+    }
+    sock_fd& operator=(sock_fd && right)
+    {
+        fd = right.fd;
+        right.fd = -1;
+        return *this;
+    }
 
     int get() const
     {
@@ -146,8 +159,9 @@ class TransportPacket
 
 constexpr uint32_t RECV_BUFFER_SIZE{4096};
 static_assert(RECV_BUFFER_SIZE > BASE_HEADER_PACKED_SIZE + TransportPacket::TRANSPORT_HEADER_PACKED_SIZE);
+constexpr int DEFAULT_BUFFER_SIZE{RECV_BUFFER_SIZE * 1024};
 
-void set_buffer_size(int fd, int size = 4096 * 1024);
+void set_buffer_size(const int fd, const int size = DEFAULT_BUFFER_SIZE);
 
 net::tracker_table generate_tracker_table(const std::string & table_filename = "tracker.txt");
 
@@ -158,5 +172,7 @@ std::shared_ptr<addrinfo> hostname_to_ip4(net::hostname host, uint16_t port);
 std::string sockaddr_to_str(const sockaddr & addr);
 
 uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, const uint32_t window_start_seq_no);
+
+std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int buffer_size = DEFAULT_BUFFER_SIZE);
 
 }

@@ -140,5 +140,9 @@ int main(int argc, char * argv[])
         return -1;
     }
 
+    auto recv_fd_addr = net::bind_recv_local(emulator_port);
+    const auto & recv_sock_fd = recv_fd_addr.first;
+    const auto & emulator_addr = recv_fd_addr.second;
+
     return 0;
 }

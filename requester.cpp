@@ -106,7 +106,6 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
         std::this_thread::sleep_for(net::RECV_LOOP_DELAY);
 
         recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
-
         if (recv_len > 0)
         {
             TransportPacket recv_packet(recv_buf.data(), recv_len);
@@ -258,45 +257,9 @@ int main(int argc, char * argv[])
 
     auto job_queue = generate_job_queue(filename);
 
-    // UDP non-blocking recieve
-    const net::sock_fd recv_sock_fd(socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0));
-
-    net::set_buffer_size(recv_sock_fd.get());
-    if (recv_sock_fd.get() < 0)
-    {
-        std::cerr << "Could not initialize recv socket\n";
-        return -1;
-    }
-    else
-    {
-        std::cerr << "Initialized requester server socket: " << recv_sock_fd.get() << '\n';
-    }
-
-    // initialize requester packet waiting...
-    sockaddr_in requester_recv_addr;
-    memset(&requester_recv_addr, 0, sizeof(sockaddr_in));
-    requester_recv_addr.sin_family = AF_INET;
-    requester_recv_addr.sin_port = htons(requester_port);
-
-    // get local machine IP
-    char local_hostname[128]{0};
-    if (gethostname(local_hostname, sizeof(local_hostname)))
-    {
-        std::cerr << "gethostname error\n";
-        return -1;
-    }
-    std::cout << "Resolved machine name: " << local_hostname << '\n';
-    hostent *ent = gethostbyname(local_hostname);
-    in_addr host_addr = *(in_addr*)ent->h_addr;
-    delete ent;
-    std::cout << "Resolved machine ip: " << inet_ntoa(host_addr) << '\n';
-    requester_recv_addr.sin_addr.s_addr = host_addr.s_addr;
-
-    if (bind(recv_sock_fd.get(),(sockaddr*)&requester_recv_addr,sizeof(requester_recv_addr)) == -1)
-    {
-        std::cerr << "Could not bind socket: " << recv_sock_fd.get() << '\n';
-        return -1;
-    }
+    auto recv_fd_addr = net::bind_recv_local(requester_port);
+    auto & recv_sock_fd = recv_fd_addr.first;
+    auto & requester_recv_addr = recv_fd_addr.second;
 
     // initialize UDP send socket
     const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
@@ -317,16 +280,16 @@ int main(int argc, char * argv[])
         auto ip_addr = net::hostname_to_ip4(hostname,sender_port);
         if (!ip_addr)
         {
-            std::cerr << "Could not resolve hostname/requester_port: " << hostname << '/' << sender_port << '\n';
+            std::cerr << "Could not resolve hostname/sender_port: " << hostname << '/' << sender_port << '\n';
             return -1;
         }
         else
         {
-            std::cerr << "Resolved hostname/requester_port: " << hostname << '/' << sender_port << '\n';
+            std::cerr << "Resolved hostname/sender_port: " << hostname << '/' << sender_port << '\n';
         }
 
         // dispatch recv thread
-        auto recv_thread = std::async(std::launch::async, requester_recv_task, std::ref(recv_sock_fd), requester_recv_addr,
+        auto recv_thread = std::async(std::launch::async, requester_recv_task, std::ref(recv_sock_fd), *(sockaddr_in*)&requester_recv_addr,
             std::ref(send_sock_fd), requester_window_size);
 
         // dispatch request packet

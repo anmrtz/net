@@ -10,7 +10,7 @@
 namespace net
 {
 
-void set_buffer_size(int fd, int size)
+void set_buffer_size(const int fd, const int size)
 {
     if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size)) == -1)
         std::cerr << "setsocktop error: failed to set buffer size\n";
@@ -351,6 +351,40 @@ uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, cons
         }
         return next_expected_seq_no;
     }
+}
+
+std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int buffer_size)
+{
+    // UDP non-blocking recieve
+    int recv_sock_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+
+    net::set_buffer_size(recv_sock_fd.get(), buffer_size);
+    if (recv_sock_fd < 0)
+        throw std::runtime_error("Could not initialize recv socket\n");
+
+    // initialize requester packet waiting...
+    sockaddr_in recv_addr;
+    memset(&recv_addr, 0, sizeof(sockaddr_in));
+    recv_addr.sin_family = AF_INET;
+    recv_addr.sin_port = htons(port);
+
+    // get local machine IP
+    char local_hostname[128]{0};
+    if (gethostname(local_hostname, sizeof(local_hostname)))
+        throw std::runtime_error("gethostname error\n");
+
+    hostent *ent = gethostbyname(local_hostname);
+    in_addr host_addr = *(in_addr*)ent->h_addr;
+    delete ent;
+    std::cerr << "Resolved [" << local_hostname << "] machine ip: " << inet_ntoa(host_addr) << '\n';
+    recv_addr.sin_addr.s_addr = host_addr.s_addr;
+
+    sockaddr addr = *(sockaddr*)&recv_addr;
+
+    if (bind(recv_sock_fd,&addr,sizeof(addr)) == -1)
+        throw std::runtime_error("Could not bind socket: " + std::to_string(recv_sock_fd) + "\n");
+
+    return std::make_pair(sock_fd(recv_sock_fd), addr);
 }
 
 }
