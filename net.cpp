@@ -4,6 +4,7 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <memory>
 
 #include <boost/lexical_cast.hpp>
 
@@ -353,12 +354,34 @@ uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, cons
     }
 }
 
+static uint32_t get_ip4_from_hostname(const std::string & hostname)
+{
+    //std::unique_ptr<hostent> ent = std::unique_ptr<hostent>(gethostbyname(hostname.c_str()));
+    hostent* ent = gethostbyname(hostname.c_str());
+    if (!ent)
+        throw std::runtime_error("bind_recv_local error: could not resolve hostname: " + hostname + '\n');
+
+    in_addr host_addr = *(in_addr*)ent->h_addr;
+    return host_addr.s_addr;
+}
+
+sockaddr_in get_sockaddr_in_from_hostport(const std::string & hostname, const uint16_t port)
+{
+    sockaddr_in addr_in{0};
+
+    addr_in.sin_family = AF_INET;
+    addr_in.sin_addr.s_addr = get_ip4_from_hostname(hostname);
+    addr_in.sin_port = htons(port);
+
+    return addr_in;
+}
+
 std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int buffer_size)
 {
     // UDP non-blocking recieve
     int recv_sock_fd = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
 
-    net::set_buffer_size(recv_sock_fd.get(), buffer_size);
+    net::set_buffer_size(recv_sock_fd, buffer_size);
     if (recv_sock_fd < 0)
         throw std::runtime_error("Could not initialize recv socket\n");
 
@@ -373,11 +396,7 @@ std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int
     if (gethostname(local_hostname, sizeof(local_hostname)))
         throw std::runtime_error("gethostname error\n");
 
-    hostent *ent = gethostbyname(local_hostname);
-    in_addr host_addr = *(in_addr*)ent->h_addr;
-    delete ent;
-    std::cerr << "Resolved [" << local_hostname << "] machine ip: " << inet_ntoa(host_addr) << '\n';
-    recv_addr.sin_addr.s_addr = host_addr.s_addr;
+    recv_addr.sin_addr.s_addr = get_ip4_from_hostname(local_hostname);
 
     sockaddr addr = *(sockaddr*)&recv_addr;
 

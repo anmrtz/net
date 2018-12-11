@@ -16,7 +16,7 @@ using TRANSPORT_PRIORITY = TransportPacket::TRANSPORT_PRIORITY;
 
 static emulator_table parse_emulator_table(std::iostream & stream)
 {
-    emulator_table ft;
+    emulator_table et;
     std::string line;
 
     while(std::getline(stream,line))
@@ -58,12 +58,12 @@ static emulator_table parse_emulator_table(std::iostream & stream)
             throw std::runtime_error("parse_forwarding_table error. Could not parse line: " + line + "; " + e.what() + "\n");
         }
 
-        ft.emplace_back(std::move(ee));
+        et.emplace_back(std::move(ee));
     }
-    return ft;
+    return et;
 }
 
-static void print_forwarding_table(const emulator_table & ft, std::ostream & stream)
+static void print_emulator_table(const emulator_table & ft, std::ostream & stream)
 {
     for (const auto & ee : ft)
     {
@@ -72,6 +72,62 @@ static void print_forwarding_table(const emulator_table & ft, std::ostream & str
         stream << "NextHop(" << ee.next_hop.first << "," << ee.next_hop.second << ") ";
         stream << "Delay-ms(" << ee.delay.count() << ") ";
         stream << "Loss-\%(" << +ee.loss_probability << ")\n";
+    }
+}
+
+static forwarding_table generate_forwarding_table(const emulator_table & et, const sockaddr & machine_addr)
+{
+    forwarding_table ft(sockaddr_in_comp);
+
+    const sockaddr_in * machine_addr_in = (sockaddr_in*)&machine_addr;
+
+    for (const auto & ee : et)
+    {
+        // if the ports don't match, then the emulator entry definitely doesn't apply
+        if (machine_addr_in->sin_port != htons(ee.emulator.second))
+            continue;
+
+        // get emulator entry ip4 emulator address from the hostname
+        sockaddr_in ee_emulator_addr, ee_destination_addr, ee_next_hop_addr;
+        try
+        {
+            ee_emulator_addr = net::get_sockaddr_in_from_hostport(ee.emulator.first,ee.emulator.second);
+            ee_destination_addr = net::get_sockaddr_in_from_hostport(ee.destination.first,ee.destination.second);
+            ee_next_hop_addr = net::get_sockaddr_in_from_hostport(ee.next_hop.first,ee.next_hop.second);
+        }
+        catch (std::runtime_error & e)
+        {
+            std::cerr << e.what();
+            continue;
+        }
+
+        if (*machine_addr_in == ee_emulator_addr)
+        {
+            // duplicate destination/next-hop pairs are considered an error
+            if(ft.count(ee_destination_addr))
+                throw std::runtime_error("generate_forwarding_table error: duplicate entries for destination host - "
+                    + ee.destination.first + '\n');
+
+            if (*machine_addr_in == ee_next_hop_addr)
+                throw std::runtime_error("forwarding table error: circular route - destination(ip,port) == next-hop(ip,port)\n");
+
+            // delay value is unused for now
+            ft.insert(std::make_pair(ee_destination_addr, 
+                forwarding_dest(ee_next_hop_addr, 0, ee.delay, ee.loss_probability)));
+        }
+    }
+
+    return ft;
+}
+
+static void print_forwarding_table(const forwarding_table & ft, std::ostream & stream)
+{
+    for (const auto & fe : ft)
+    {
+        sockaddr_in * dest_addr = (sockaddr_in*)&fe.first;
+        sockaddr_in * next_hop_addr = (sockaddr_in*)&fe.second;
+        stream << "Destination: (" << inet_ntoa(dest_addr->sin_addr) << ',' <<  ntohs(dest_addr->sin_port) << 
+            ") --> Next-hop: (" << inet_ntoa(next_hop_addr->sin_addr) << ',' << ntohs(next_hop_addr->sin_port) << ")\n";
     }
 }
 
@@ -128,21 +184,22 @@ int main(int argc, char * argv[])
         std::cerr << "Could not open forwarding table file: " << emulator_table_filename << '\n';
         return -1;
     }
-    try
-    {
-        auto ft = parse_emulator_table(et_file);
-        std::cout << "Parsed forwarding table:\n"; print_forwarding_table(ft,std::cout);
-    }
-    catch (std::exception & e)
-    {
-        std::cerr << e.what() << '\n' << std::flush;
-        std::cout << std::flush;
-        return -1;
-    }
 
     auto recv_fd_addr = net::bind_recv_local(emulator_port);
     const auto & recv_sock_fd = recv_fd_addr.first;
     const auto & emulator_addr = recv_fd_addr.second;
+    try
+    {
+        auto et = parse_emulator_table(et_file);
+        std::cout << "\nParsed emulator table:\n"; print_emulator_table(et,std::cout);
+        auto ft = generate_forwarding_table(et,emulator_addr);
+        std::cout << "\nGenerated forwarding table for this node:\n"; print_forwarding_table(ft,std::cout);
+    }
+    catch (std::runtime_error & e)
+    {
+        std::cerr << "\nError generating forwarding table: " << e.what() << '\n' << std::flush;
+        return -1;
+    }
 
     return 0;
 }

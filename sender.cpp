@@ -194,8 +194,6 @@ int main(int argc, char * argv[])
     const auto & recv_sock_fd = recv_fd_addr.first;
     const auto & sender_addr = recv_fd_addr.second;
 
-    std::cerr << net::sockaddr_to_str(sender_addr) << "; " << recv_sock_fd.get() << '\n';
-
     // initialize blocking UDP send socket
     const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
     net::set_buffer_size(send_sock_fd.get());

@@ -175,4 +175,6 @@ uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, cons
 
 std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int buffer_size = DEFAULT_BUFFER_SIZE);
 
+sockaddr_in get_sockaddr_in_from_hostport(const std::string & hostname, const uint16_t port);
+
 }
