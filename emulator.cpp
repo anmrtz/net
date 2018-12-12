@@ -9,6 +9,8 @@
 #include <vector>
 #include <chrono>
 #include <sstream>
+#include <thread>
+#include <random>
 
 namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
@@ -144,6 +146,89 @@ using packet_queue = std::priority_queue<TransportPacket, std::vector<TransportP
     decltype(tp_left_priority_less_than)>;
 static packet_queue outgoing_queue(tp_left_priority_less_than);
 
+static uint8_t random_percent()
+{
+    static std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 100);
+
+    return dis(gen);
+}
+
+static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_sock_fd, const sockaddr & router_addr,
+    const uint32_t queue_max_size)
+{
+    // initialize blocking UDP send socket
+    const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
+    net::set_buffer_size(send_sock_fd.get());
+    if (send_sock_fd.get() < 0)
+        throw std::runtime_error("Could not initialize send socket\n");
+
+    std::array<uint8_t, net::RECV_BUFFER_SIZE> recv_buf;
+    auto packet_wake_time = std::chrono::system_clock::now();
+    bool front_packet_being_delayed{false};
+
+    std::cout << "\nStarting routing loop...\n";
+    while (true)
+    {
+        std::this_thread::sleep_for(net::RECV_LOOP_DELAY);
+
+        sockaddr src_addr;
+        memset(&src_addr, 0, sizeof(src_addr));
+        socklen_t src_addr_len{sizeof(src_addr)};
+
+        int recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
+        // if packet has been received...
+        if (recv_len > 0)
+        {
+            TransportPacket recv_packet(recv_buf.data(), recv_len);
+
+            // Future plans - check if this is a routing packet
+
+            // else try to queue it
+            if (outgoing_queue.size() < queue_max_size)
+            {
+                // first make sure the packet has a valid next-hop for its destination
+                const sockaddr packet_dest_addr = recv_packet.get_transport_dest();
+
+                if (ft.count(*(sockaddr_in*)&packet_dest_addr))
+                    outgoing_queue.push(std::move(recv_packet));
+                else
+                    std::cout << "routing_loop event: packet dropped due to no valid next-hop\n";
+            }
+            else
+            {
+                std::cout << "routing_loop event: packet dropped due to full queue\n";
+            }
+        }
+        // else if there is a packet being delayed and the delay is over
+        else if (front_packet_being_delayed && std::chrono::system_clock::now() > packet_wake_time)
+        {
+            // get packet drop chance
+            const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
+
+            const auto drop_chance = ft.at(*(sockaddr_in*)&front_dest_addr).loss_probability;
+            decltype(drop_chance) roll_percentage{random_percent()};
+
+            if (roll_percentage >= drop_chance)
+                // send packet
+                outgoing_queue.top().forward_packet(send_sock_fd,front_dest_addr);
+            else
+                std::cout << "routing_loop event: packet dropped due to random chance\n";
+
+            outgoing_queue.pop();
+            front_packet_being_delayed = false;
+        }
+        // else retrieve the next packet if there 
+        else if (!outgoing_queue.empty())
+        {
+            const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
+            packet_wake_time = std::chrono::system_clock::now() + ft.at(*(sockaddr_in*)&front_dest_addr).delay;
+            front_packet_being_delayed = true;
+        }
+    }
+}
+
 int main(int argc, char * argv[])
 {
     uint16_t emulator_port, queue_size;
@@ -178,22 +263,20 @@ int main(int argc, char * argv[])
         return -1;
     }
 
-    std::fstream et_file(emulator_table_filename);
-    if (!et_file.is_open())
-    {
-        std::cerr << "Could not open forwarding table file: " << emulator_table_filename << '\n';
-        return -1;
-    }
-
-    auto recv_fd_addr = net::bind_recv_local(emulator_port);
-    const auto & recv_sock_fd = recv_fd_addr.first;
-    const auto & emulator_addr = recv_fd_addr.second;
     try
     {
-        auto et = parse_emulator_table(et_file);
-        std::cout << "\nParsed emulator table:\n"; print_emulator_table(et,std::cout);
-        auto ft = generate_forwarding_table(et,emulator_addr);
+        std::fstream et_file(emulator_table_filename);
+        if (!et_file.is_open())
+        {
+            std::cerr << "Could not open forwarding table file: " << emulator_table_filename << '\n';
+            return -1;
+        }
+
+        const auto recv_fd_addr = net::bind_recv_local(emulator_port);
+        auto ft = generate_forwarding_table(parse_emulator_table(et_file),recv_fd_addr.second);
         std::cout << "\nGenerated forwarding table for this node:\n"; print_forwarding_table(ft,std::cout);
+
+        routing_loop(ft,recv_fd_addr.first,recv_fd_addr.second,queue_size);
     }
     catch (std::runtime_error & e)
     {

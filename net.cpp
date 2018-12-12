@@ -336,7 +336,7 @@ uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, cons
     else
     {
         // find end of contiguous set
-        uint32_t next_expected_seq_no;
+        uint32_t next_expected_seq_no{window_start_seq_no};
         for (auto i = window.begin(); i != window.end(); i++)
         {
             const auto & curr_packet = *i;
