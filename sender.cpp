@@ -233,12 +233,13 @@ int main(int argc, char * argv[])
         int recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
         if (recv_len > 0)
         {
+            timeout_count = 0;
             most_recent_packet_time = std::chrono::system_clock::now();
 
             const TransportPacket recv_packet(recv_buf.data(), recv_len);
+
             const auto base_type = recv_packet.get_base_type();
             const auto type = static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(base_type);
-
             std::cerr << "Packet received! Type: " << type << "; Total packet size: " << recv_len <<
                 "; Origin addr: " << net::sockaddr_to_str(recv_packet.get_transport_src()) <<
                 "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
@@ -302,6 +303,8 @@ int main(int argc, char * argv[])
         // account for timeout
         else if (is_request_pending && most_recent_packet_time + net::SENDER_RECV_TIMEOUT < std::chrono::system_clock::now())
         {
+            most_recent_packet_time += net::SENDER_RECV_TIMEOUT;
+
             if (++timeout_count > net::MAX_TIMEOUT_COUNT)
             {
                 std::cerr << "Sender timed out waiting for response\n";
@@ -309,9 +312,16 @@ int main(int argc, char * argv[])
             }
 
             if (end_sent)
+            {
+                std::cout << "--- Retrying END packet send: ";
                 send_end_packet(send_sock_fd,sender_addr,request_packet_src_addr,emulator_addr);
+            }
             else
-                send_data_packets(send_sock_fd,send_window,curr_window_start,packet_time_interval,emulator_addr);
+            {
+                std::cout << "--- Retrying DATA window send: ";
+                curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
+                    packet_time_interval,emulator_addr);
+            }
         }
     }
 

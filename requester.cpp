@@ -109,7 +109,12 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
         if (recv_len > 0)
         {
             TransportPacket recv_packet(recv_buf.data(), recv_len);
+
             const auto base_type = recv_packet.get_base_type();
+            const auto type = static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(base_type);
+            std::cerr << "Packet received! Type: " << type << "; Total packet size: " << recv_len <<
+                "; Origin addr: " << net::sockaddr_to_str(recv_packet.get_transport_src()) <<
+                "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
 
             most_recent_packet_time = std::chrono::system_clock::now();
 
@@ -150,6 +155,7 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                     throw std::runtime_error("request_recv_task local/destination address mismatch\n");
 
                 next_expected_seq_no = net::get_next_expected_seq_no(recv_window, window_start_seq_no);
+                std::cout << "Next expected seq no: " << next_expected_seq_no << '\n';
                 send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, data_packet.get_transport_src(),
                     next_expected_seq_no,gateway_addr);
 
@@ -167,7 +173,7 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
 
                 const auto & payload_chunk = data_packet.get_payload();
 
-                std::cout << "Packet received. Arrival time (ms): " <<
+                std::cout << "Data received. Arrival time (ms): " <<
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - 
                         first_data_packet_time).count() <<
                     "; Origin addr: " << net::sockaddr_to_str(data_packet.get_transport_src()) <<

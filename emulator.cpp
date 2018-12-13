@@ -205,36 +205,35 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
         else if (front_packet_being_delayed && std::chrono::system_clock::now() > packet_wake_time)
         {
             // get forwarding hop
-            const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
+            const auto & front_packet = outgoing_queue.top();
+            const sockaddr front_dest_addr = front_packet.get_transport_dest();
             const auto & forward_hop = ft.at(*(sockaddr_in*)&front_dest_addr);
 
             const auto drop_chance = forward_hop.loss_probability;
             decltype(drop_chance) roll_percentage{random_percent()};
 
+            std::cout << "Attempting packet forward. Type : " 
+                << static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(front_packet.get_base_type())
+                << "; Orig: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
+                << "; Dest: " << net::sockaddr_to_str(front_packet.get_transport_dest())
+                << "; Hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr);
             if (roll_percentage >= drop_chance)
             {
-                // send packet
-                const auto & front_packet = outgoing_queue.top();
-
-                std::cout << "Forwarding packet. Type : " 
-                    << static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(front_packet.get_base_type())
-                    << "; Origin: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
-                    << "; Destination: " << net::sockaddr_to_str(front_packet.get_transport_dest())
-                    << "; Next-hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr)
-                    << '\n';
                 front_packet.forward_packet(send_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
             }
             else
-                std::cout << "routing_loop event: packet dropped due to random chance\n";
+                std::cout << " - DROPPED";
+            std::cout << '\n';
 
             outgoing_queue.pop();
             front_packet_being_delayed = false;
         }
         // else retrieve the next packet if there 
-        else if (!outgoing_queue.empty())
+        else if (!front_packet_being_delayed && !outgoing_queue.empty())
         {
             const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
             packet_wake_time = std::chrono::system_clock::now() + ft.at(*(sockaddr_in*)&front_dest_addr).delay;
+            //std::cout << "Delaying packet (ms): " << std::chrono::duration_cast<std::chrono::milliseconds>(packet_wake_time - std::chrono::system_clock::now()).count();
             front_packet_being_delayed = true;
         }
     }
