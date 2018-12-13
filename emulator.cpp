@@ -216,7 +216,9 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
                 // send packet
                 const auto & front_packet = outgoing_queue.top();
 
-                std::cout << "Forwarding packet. Origin: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
+                std::cout << "Forwarding packet. Type : " 
+                    << static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(front_packet.get_base_type())
+                    << "; Origin: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
                     << "; Destination: " << net::sockaddr_to_str(front_packet.get_transport_dest())
                     << "; Next-hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr)
                     << '\n';

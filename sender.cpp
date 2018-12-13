@@ -221,6 +221,7 @@ int main(int argc, char * argv[])
     uint32_t curr_highest_ack_expected{0};
     uint32_t curr_highest_ack_received{0};
 
+    std::cout << "Waiting for request packet...\n";
     while (true)
     {
         std::this_thread::sleep_for(net::RECV_LOOP_DELAY);
@@ -239,7 +240,7 @@ int main(int argc, char * argv[])
             const auto type = static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(base_type);
 
             std::cerr << "Packet received! Type: " << type << "; Total packet size: " << recv_len <<
-                "; Src addr: " << net::sockaddr_to_str(src_addr) <<
+                "; Origin addr: " << net::sockaddr_to_str(recv_packet.get_transport_src()) <<
                 "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
 
             if (base_type == net::BASE_PACKET_TYPE::REQUEST)

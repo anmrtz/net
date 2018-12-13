@@ -170,7 +170,7 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                 std::cout << "Packet received. Arrival time (ms): " <<
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - 
                         first_data_packet_time).count() <<
-                    "; Src addr: " << net::sockaddr_to_str(src_addr) <<
+                    "; Origin addr: " << net::sockaddr_to_str(data_packet.get_transport_src()) <<
                     "; Seq no: " << data_packet.get_seq_no() <<
                     "; Payload size: " << payload_chunk.size() <<
                     "; First 4 bytes of payload: \"";
