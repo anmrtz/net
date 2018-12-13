@@ -14,6 +14,10 @@ namespace po = boost::program_options;
 using job_queue_t = std::vector<net::tracker_entry>;
 using TransportPacket = net::TransportPacket;
 
+constexpr std::chrono::milliseconds REQUESTER_RECV_TIMEOUT{5000};
+static_assert(REQUESTER_RECV_TIMEOUT.count() >= 0, "REQUESTER_RECV_TIMEOUT must be >= 0\n");
+static_assert(REQUESTER_RECV_TIMEOUT > net::RECV_LOOP_DELAY, "recv loop time slice too large to capture packet timeouts\n");
+
 static job_queue_t generate_job_queue(const std::string & requested_file)
 {
     auto tt = net::generate_tracker_table();
@@ -73,9 +77,9 @@ static void send_ack_packet(const net::sock_fd & fd, const sockaddr & src_addr, 
 {
     TransportPacket ack_packet(net::BASE_PACKET_TYPE::ACK, TransportPacket::TRANSPORT_PRIORITY::HIGH, 
         src_addr, dest_addr, next_expected_seq_no);
-
-    std::cout << "Sending ACK" << '\n';
-
+#ifdef DEBUG_MSG
+    std::cout << "Sending ACK # " << next_expected_seq_no << '\n';
+#endif
     ack_packet.forward_packet(fd,gateway_addr);
 }
 
@@ -112,9 +116,11 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
 
             const auto base_type = recv_packet.get_base_type();
             const auto type = static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(base_type);
+#ifdef DEBUG_MSG
             std::cerr << "Packet received! Type: " << type << "; Total packet size: " << recv_len <<
                 "; Origin addr: " << net::sockaddr_to_str(recv_packet.get_transport_src()) <<
                 "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
+#endif
 
             most_recent_packet_time = std::chrono::system_clock::now();
 
@@ -142,7 +148,11 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                 }
 
                 if (recv_packet.get_seq_no() < window_start_seq_no)
+                {
+                    send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, recv_packet.get_transport_src(),
+                        next_expected_seq_no,gateway_addr);
                     continue;
+                }
 
                 auto inserted_packet = recv_window.insert(std::move(recv_packet));
                 const auto & data_packet = *inserted_packet.first;
@@ -155,13 +165,13 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                     throw std::runtime_error("request_recv_task local/destination address mismatch\n");
 
                 next_expected_seq_no = net::get_next_expected_seq_no(recv_window, window_start_seq_no);
-                std::cout << "Next expected seq no: " << next_expected_seq_no << '\n';
-                send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, data_packet.get_transport_src(),
-                    next_expected_seq_no,gateway_addr);
+
 
                 if (inserted_packet.second == false)
                 {
+#ifdef DEBUG_MSG
                     std::cout << "Duplicate packet received. Sequence number: " << data_packet.get_seq_no() << '\n';
+#endif
                     continue;
                 }
                 else if (recv_window.size() > recv_window_size)
@@ -171,8 +181,8 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
 
                 ++data_packets_received;
 
+#ifdef DEBUG_MSG
                 const auto & payload_chunk = data_packet.get_payload();
-
                 std::cout << "Data received. Arrival time (ms): " <<
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - 
                         first_data_packet_time).count() <<
@@ -180,11 +190,10 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                     "; Seq no: " << data_packet.get_seq_no() <<
                     "; Payload size: " << payload_chunk.size() <<
                     "; First 4 bytes of payload: \"";
-
                 std::cout << std::string(payload_chunk.begin(), payload_chunk.begin() + 
                     std::min(payload_chunk.size(),std::size_t(4)));
                 std::cout << "\"\n";
-
+#endif
                 if (recv_window.size() == recv_window_size)
                 {
                     const auto & start_packet = *recv_window.begin();
@@ -201,11 +210,11 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                 }
             }
         }
-        else if (most_recent_packet_time + net::REQUESTER_RECV_TIMEOUT < std::chrono::system_clock::now())
+        else if (most_recent_packet_time + REQUESTER_RECV_TIMEOUT < std::chrono::system_clock::now())
         {
             // need to account for a data ack lost on the way to the sender
             throw std::runtime_error("requester_recv_task timed out after no packets received for " +
-                std::to_string(net::REQUESTER_RECV_TIMEOUT.count()) + " ms\n");
+                std::to_string(REQUESTER_RECV_TIMEOUT.count()) + " ms\n");
         }
     }
 

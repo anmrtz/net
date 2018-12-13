@@ -13,6 +13,8 @@
 #include <utility>
 #include <iostream>
 
+#define DEBUG_MSG
+
 namespace net
 {
 
@@ -22,15 +24,6 @@ using tracker_table = std::vector<tracker_entry>;
 
 constexpr std::chrono::microseconds RECV_LOOP_DELAY{1};
 static_assert(RECV_LOOP_DELAY.count() >= 0, "RECV_LOOP_DELAY must be >= 0\n");
-constexpr std::chrono::milliseconds REQUESTER_RECV_TIMEOUT{5000};
-static_assert(REQUESTER_RECV_TIMEOUT.count() >= 0, "REQUESTER_RECV_TIMEOUT must be >= 0\n");
-static_assert(REQUESTER_RECV_TIMEOUT > RECV_LOOP_DELAY, "recv loop time slice too large to capture packet timeouts\n");
-constexpr std::chrono::milliseconds SENDER_RECV_TIMEOUT{500};
-static_assert(SENDER_RECV_TIMEOUT.count() >= 0, "SENDER_RECV_TIMEOUT must be >= 0\n");
-static_assert(SENDER_RECV_TIMEOUT > RECV_LOOP_DELAY, "recv loop time slice too large to capture packet timeouts\n");
-
-constexpr uint8_t MAX_TIMEOUT_COUNT{3};
-static_assert(MAX_TIMEOUT_COUNT > 0, "Max timeout must be > 0");
 
 // automatically clean-up out of scope socket fd
 class sock_fd

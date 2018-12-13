@@ -12,8 +12,16 @@
 namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
 
+constexpr std::chrono::milliseconds SENDER_RECV_TIMEOUT{250};
+static_assert(SENDER_RECV_TIMEOUT.count() >= 0, "SENDER_RECV_TIMEOUT must be >= 0\n");
+static_assert(SENDER_RECV_TIMEOUT > net::RECV_LOOP_DELAY, "recv loop time slice too large to capture packet timeouts\n");
+
+constexpr uint8_t MAX_TIMEOUT_COUNT{3};
+static_assert(MAX_TIMEOUT_COUNT > 0, "Max timeout must be > 0");
+
 static uint32_t send_data_packets(const net::sock_fd & fd, const std::set<TransportPacket> & window, 
-    const uint32_t curr_window_start,const std::chrono::nanoseconds & per_packet_delay, const sockaddr & gateway_addr)
+    const uint32_t curr_window_start,const std::chrono::nanoseconds & per_packet_delay, const sockaddr & gateway_addr,
+    const std::set<net::TransportPacket>::iterator send_start)
 {
     if (window.empty())
         return curr_window_start;
@@ -38,13 +46,16 @@ static uint32_t send_data_packets(const net::sock_fd & fd, const std::set<Transp
     }
 
     // send the packets with delay
-    for (const auto & packet : window)
+    for (auto curr_packet_iter = send_start; curr_packet_iter != window.end(); curr_packet_iter++)
     {
-        std::this_thread::sleep_until(send_wake_time);
-        send_wake_time += per_packet_delay;
+        const auto & packet = *curr_packet_iter;
+
+        //std::this_thread::sleep_until(send_wake_time);
+        //send_wake_time += per_packet_delay;
 
         const auto & payload_chunk = packet.get_payload();
 
+#ifdef DEBUG_MSG
         std::cout << "Sending data packet. Send time (ms): " <<
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - 
                 send_start_time).count() <<
@@ -56,6 +67,7 @@ static uint32_t send_data_packets(const net::sock_fd & fd, const std::set<Transp
         std::cout << std::string(payload_chunk.begin(), payload_chunk.begin() + 
             std::min(payload_chunk.size(),std::size_t(4)));
         std::cout << "\"\n";
+#endif
 
         packet.forward_packet(fd, gateway_addr);
     }
@@ -81,7 +93,7 @@ static std::set<TransportPacket> queue_data_packets(std::vector<uint8_t> & data_
         if (chunk_end_pos > data_vector.end())
             throw std::runtime_error("payload chunking error: chunk_pos went past end()\n");
 
-        auto curr_data = packets.emplace(net::BASE_PACKET_TYPE::DATA, TransportPacket::TRANSPORT_PRIORITY::HIGH,
+        auto curr_data = packets.emplace(net::BASE_PACKET_TYPE::DATA, TransportPacket::TRANSPORT_PRIORITY::MEDIUM,
             src_addr, dest_addr, curr_seq_no, std::vector<uint8_t>(data_vector.begin(), chunk_end_pos));
 
         curr_seq_no += curr_data.first->get_payload_size();
@@ -89,8 +101,6 @@ static std::set<TransportPacket> queue_data_packets(std::vector<uint8_t> & data_
     
         data_vector.erase(data_vector.begin(), chunk_end_pos);
     }
-
-    std::cerr << "Queue assembled. Size: " << packets.size() << "\n";
 
     return packets;
 }
@@ -100,8 +110,6 @@ static void send_end_packet(const net::sock_fd & fd, const sockaddr & src_addr, 
 {
     TransportPacket end_packet(net::BASE_PACKET_TYPE::END, TransportPacket::TRANSPORT_PRIORITY::HIGH,src_addr,
         dest_addr);
-
-    std::cout << "Sending end packet\n";
 
     end_packet.forward_packet(fd,gateway_addr);
 }
@@ -208,7 +216,7 @@ int main(int argc, char * argv[])
     }
 
     std::chrono::time_point<std::chrono::system_clock> most_recent_packet_time{std::chrono::system_clock::now()};
-    std::remove_const<decltype(net::MAX_TIMEOUT_COUNT)>::type timeout_count{0};
+    std::remove_const<decltype(MAX_TIMEOUT_COUNT)>::type timeout_count{0};
     const auto packet_time_interval = DURATION_ONE_SECOND / packet_rate;
 
     bool is_request_pending{false};
@@ -221,6 +229,7 @@ int main(int argc, char * argv[])
     uint32_t curr_highest_ack_expected{0};
     uint32_t curr_highest_ack_received{0};
 
+    auto sender_start_time = std::chrono::system_clock::now();
     std::cout << "Waiting for request packet...\n";
     while (true)
     {
@@ -240,9 +249,11 @@ int main(int argc, char * argv[])
 
             const auto base_type = recv_packet.get_base_type();
             const auto type = static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(base_type);
+#ifdef DEBUG_MSG
             std::cerr << "Packet received! Type: " << type << "; Total packet size: " << recv_len <<
                 "; Origin addr: " << net::sockaddr_to_str(recv_packet.get_transport_src()) <<
                 "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
+#endif
 
             if (base_type == net::BASE_PACKET_TYPE::REQUEST)
             {
@@ -252,13 +263,15 @@ int main(int argc, char * argv[])
                 request_packet_src_addr = recv_packet.get_transport_src();
                 window_size = recv_packet.get_seq_no();
 
+#ifdef DEBUG_MSG
                 std::cerr << "Request packet received from addr: " << net::sockaddr_to_str(request_packet_src_addr) <<
                     "; Requester advertised window size: " << window_size << '\n';
+#endif
 
                 send_window = queue_data_packets(data_vector, window_size,payload_chunk_size,curr_window_start,
                     sender_addr,request_packet_src_addr);
                 curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
-                    packet_time_interval,emulator_addr);
+                    packet_time_interval,emulator_addr,send_window.begin());
             }
             else if (base_type == net::BASE_PACKET_TYPE::ACK)
             {
@@ -285,7 +298,7 @@ int main(int argc, char * argv[])
                         send_window = queue_data_packets(data_vector, window_size,payload_chunk_size,curr_window_start,
                             sender_addr,request_packet_src_addr);
                         curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
-                            packet_time_interval,emulator_addr);
+                            packet_time_interval,emulator_addr, send_window.begin());
                     }
                     else if (end_sent)
                     {
@@ -299,13 +312,15 @@ int main(int argc, char * argv[])
                     }
                 }
             }
+            else
+                throw std::runtime_error("Sender received invalid packet type: " + type + '\n');
         }
         // account for timeout
-        else if (is_request_pending && most_recent_packet_time + net::SENDER_RECV_TIMEOUT < std::chrono::system_clock::now())
+        else if (is_request_pending && most_recent_packet_time + SENDER_RECV_TIMEOUT < std::chrono::system_clock::now())
         {
-            most_recent_packet_time += net::SENDER_RECV_TIMEOUT;
+            most_recent_packet_time = std::chrono::system_clock::now();
 
-            if (++timeout_count > net::MAX_TIMEOUT_COUNT)
+            if (++timeout_count > MAX_TIMEOUT_COUNT)
             {
                 std::cerr << "Sender timed out waiting for response\n";
                 return -1;
@@ -313,14 +328,31 @@ int main(int argc, char * argv[])
 
             if (end_sent)
             {
-                std::cout << "--- Retrying END packet send: ";
+#ifdef DEBUG_MSG
+                std::cout << "--- Retrying END packet send\n";
+#endif
                 send_end_packet(send_sock_fd,sender_addr,request_packet_src_addr,emulator_addr);
             }
             else
             {
-                std::cout << "--- Retrying DATA window send: ";
+#ifdef DEBUG_MSG
+                std::cout << "--- Retrying DATA window send at time (" << 
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() -
+                    sender_start_time).count() << "ms)" << ". Last recv ack: " << curr_highest_ack_received << 
+                    "; Curr highest expected ack: " << curr_highest_ack_expected << "\n--- ";
+#endif
+
+                const auto next_packet_expected = std::find_if(send_window.begin(),send_window.end(),
+                    [curr_highest_ack_received](const auto & packet)
+                    {
+                        return packet.get_seq_no() == curr_highest_ack_received;
+                    });
+                if (next_packet_expected == send_window.end())
+                    throw std::runtime_error(
+                            "Window send retry error: next packet expected by requester is not in current window\n");
+
                 curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
-                    packet_time_interval,emulator_addr);
+                    packet_time_interval,emulator_addr,next_packet_expected);
             }
         }
     }

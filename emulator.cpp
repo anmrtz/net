@@ -128,8 +128,10 @@ static void print_forwarding_table(const forwarding_table & ft, std::ostream & s
     {
         sockaddr_in * dest_addr = (sockaddr_in*)&fe.first;
         sockaddr_in * next_hop_addr = (sockaddr_in*)&fe.second;
+#ifdef DEBUG_MSG
         stream << "Destination: (" << inet_ntoa(dest_addr->sin_addr) << ',' <<  ntohs(dest_addr->sin_port) << 
             ") --> Next-hop: (" << inet_ntoa(next_hop_addr->sin_addr) << ',' << ntohs(next_hop_addr->sin_port) << ")\n";
+#endif
     }
 }
 
@@ -142,9 +144,10 @@ static const auto tp_left_priority_less_than = [](const TransportPacket & left, 
     else
         return false;
 };
-using packet_queue = std::priority_queue<TransportPacket, std::vector<TransportPacket>, 
-    decltype(tp_left_priority_less_than)>;
-static packet_queue outgoing_queue(tp_left_priority_less_than);
+//using packet_queue = std::priority_queue<TransportPacket, std::vector<TransportPacket>, 
+//    decltype(tp_left_priority_less_than)>;
+using packet_queue = std::queue<TransportPacket>;
+static packet_queue outgoing_queue;
 
 static uint8_t random_percent()
 {
@@ -158,17 +161,14 @@ static uint8_t random_percent()
 static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_sock_fd, const sockaddr & router_addr,
     const uint32_t queue_max_size)
 {
-    // initialize blocking UDP send socket
-    const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
-    net::set_buffer_size(send_sock_fd.get());
-    if (send_sock_fd.get() < 0)
-        throw std::runtime_error("Could not initialize send socket\n");
-
     std::array<uint8_t, net::RECV_BUFFER_SIZE> recv_buf;
     auto packet_wake_time = std::chrono::system_clock::now();
     bool front_packet_being_delayed{false};
 
     std::cout << "\nStarting routing loop...\n";
+#ifdef DEBUG_MSG
+    auto emulator_start_time = std::chrono::system_clock::now();
+#endif
     while (true)
     {
         std::this_thread::sleep_for(net::RECV_LOOP_DELAY);
@@ -205,33 +205,38 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
         else if (front_packet_being_delayed && std::chrono::system_clock::now() > packet_wake_time)
         {
             // get forwarding hop
-            const auto & front_packet = outgoing_queue.top();
+            const auto & front_packet = outgoing_queue.front();
             const sockaddr front_dest_addr = front_packet.get_transport_dest();
             const auto & forward_hop = ft.at(*(sockaddr_in*)&front_dest_addr);
 
             const auto drop_chance = forward_hop.loss_probability;
             decltype(drop_chance) roll_percentage{random_percent()};
-
-            std::cout << "Attempting packet forward. Type : " 
+#ifdef DEBUG_MSG
+            const auto send_time = std::chrono::system_clock::now() - emulator_start_time;
+            std::cout << "Packet. Type : " 
                 << static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(front_packet.get_base_type())
                 << "; Orig: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
                 << "; Dest: " << net::sockaddr_to_str(front_packet.get_transport_dest())
-                << "; Hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr);
+                << "; Hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr)
+                << "; Time (ms): " << std::chrono::duration_cast<std::chrono::milliseconds>(send_time).count()
+                << "; SN: " << front_packet.get_seq_no();
+#endif
             if (roll_percentage >= drop_chance)
             {
-                front_packet.forward_packet(send_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
+                front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
             }
+#ifdef DEBUG_MSG
             else
                 std::cout << " - DROPPED";
             std::cout << '\n';
-
+#endif
             outgoing_queue.pop();
             front_packet_being_delayed = false;
         }
         // else retrieve the next packet if there 
         else if (!front_packet_being_delayed && !outgoing_queue.empty())
         {
-            const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
+            const sockaddr front_dest_addr = outgoing_queue.front().get_transport_dest();
             packet_wake_time = std::chrono::system_clock::now() + ft.at(*(sockaddr_in*)&front_dest_addr).delay;
             //std::cout << "Delaying packet (ms): " << std::chrono::duration_cast<std::chrono::milliseconds>(packet_wake_time - std::chrono::system_clock::now()).count();
             front_packet_being_delayed = true;
