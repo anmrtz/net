@@ -13,7 +13,7 @@ namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
 
 static uint32_t send_data_packets(const net::sock_fd & fd, const std::set<TransportPacket> & window, 
-    const uint32_t curr_window_start,const std::chrono::nanoseconds & per_packet_delay)
+    const uint32_t curr_window_start,const std::chrono::nanoseconds & per_packet_delay, const sockaddr & gateway_addr)
 {
     if (window.empty())
         return curr_window_start;
@@ -57,7 +57,7 @@ static uint32_t send_data_packets(const net::sock_fd & fd, const std::set<Transp
             std::min(payload_chunk.size(),std::size_t(4)));
         std::cout << "\"\n";
 
-        packet.send_packet(fd);
+        packet.forward_packet(fd, gateway_addr);
     }
 
     return (window.rbegin()->get_seq_no() + window.rbegin()->get_payload_size());
@@ -95,14 +95,15 @@ static std::set<TransportPacket> queue_data_packets(std::vector<uint8_t> & data_
     return packets;
 }
 
-static void send_end_packet(const net::sock_fd & fd, const sockaddr & src_addr, const sockaddr & dest_addr)
+static void send_end_packet(const net::sock_fd & fd, const sockaddr & src_addr, const sockaddr & dest_addr, 
+    const sockaddr & gateway_addr)
 {
     TransportPacket end_packet(net::BASE_PACKET_TYPE::END, TransportPacket::TRANSPORT_PRIORITY::HIGH,src_addr,
         dest_addr);
 
     std::cout << "Sending end packet\n";
 
-    end_packet.send_packet(fd);
+    end_packet.forward_packet(fd,gateway_addr);
 }
 
 int main(int argc, char * argv[])
@@ -194,6 +195,9 @@ int main(int argc, char * argv[])
     const auto & recv_sock_fd = recv_fd_addr.first;
     const auto & sender_addr = recv_fd_addr.second;
 
+    const sockaddr_in emulator_addr_in = net::get_sockaddr_in_from_hostport(emulator_hostname,emulator_port);
+    const sockaddr emulator_addr = *(sockaddr*)&emulator_addr_in;
+
     // initialize blocking UDP send socket
     const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
     net::set_buffer_size(send_sock_fd.get());
@@ -238,7 +242,6 @@ int main(int argc, char * argv[])
                 "; Src addr: " << net::sockaddr_to_str(src_addr) <<
                 "; Seq no: " << recv_packet.get_seq_no() << "; Payload size: " << recv_packet.get_payload_size() << '\n';
 
-
             if (base_type == net::BASE_PACKET_TYPE::REQUEST)
             {
                 if (is_request_pending)
@@ -252,7 +255,8 @@ int main(int argc, char * argv[])
 
                 send_window = queue_data_packets(data_vector, window_size,payload_chunk_size,curr_window_start,
                     sender_addr,request_packet_src_addr);
-                curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,packet_time_interval);
+                curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
+                    packet_time_interval,emulator_addr);
             }
             else if (base_type == net::BASE_PACKET_TYPE::ACK)
             {
@@ -278,7 +282,8 @@ int main(int argc, char * argv[])
                         curr_window_start = curr_highest_ack_received;
                         send_window = queue_data_packets(data_vector, window_size,payload_chunk_size,curr_window_start,
                             sender_addr,request_packet_src_addr);
-                        curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,packet_time_interval);
+                        curr_highest_ack_expected = send_data_packets(send_sock_fd,send_window,curr_window_start,
+                            packet_time_interval,emulator_addr);
                     }
                     else if (end_sent)
                     {
@@ -287,7 +292,7 @@ int main(int argc, char * argv[])
                     else
                     {
                         // fix src_addr - amend this to send to gateway rather than directly back
-                        send_end_packet(send_sock_fd, sender_addr,request_packet_src_addr);
+                        send_end_packet(send_sock_fd, sender_addr,request_packet_src_addr,emulator_addr);
                         end_sent = true;
                     }
                 }
@@ -303,9 +308,9 @@ int main(int argc, char * argv[])
             }
 
             if (end_sent)
-                send_end_packet(send_sock_fd,sender_addr,request_packet_src_addr);
+                send_end_packet(send_sock_fd,sender_addr,request_packet_src_addr,emulator_addr);
             else
-                send_data_packets(send_sock_fd,send_window,curr_window_start,packet_time_interval);
+                send_data_packets(send_sock_fd,send_window,curr_window_start,packet_time_interval,emulator_addr);
         }
     }
 

@@ -69,18 +69,18 @@ static void append_window_packets(const std::set<TransportPacket> & recv_window,
 }
 
 static void send_ack_packet(const net::sock_fd & fd, const sockaddr & src_addr, const sockaddr & dest_addr, 
-    const uint32_t next_expected_seq_no)
+    const uint32_t next_expected_seq_no, const sockaddr & gateway_addr)
 {
     TransportPacket ack_packet(net::BASE_PACKET_TYPE::ACK, TransportPacket::TRANSPORT_PRIORITY::HIGH, 
         src_addr, dest_addr, next_expected_seq_no);
 
     std::cout << "Sending ACK" << '\n';
 
-    ack_packet.send_packet(fd);
+    ack_packet.forward_packet(fd,gateway_addr);
 }
 
 static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_fd, const sockaddr_in recv_addr, 
-    const net::sock_fd & send_sock_fd, const std::size_t recv_window_size = 1)
+    const net::sock_fd & send_sock_fd, const sockaddr & gateway_addr, const std::size_t recv_window_size = 1)
 {
     std::array<uint8_t, net::RECV_BUFFER_SIZE> recv_buf;
     sockaddr src_addr;
@@ -123,7 +123,8 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                 append_window_packets(recv_window, file_chunk);
                 recv_window.clear();
 
-                send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, recv_packet.get_transport_src(),next_expected_seq_no);
+                send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, recv_packet.get_transport_src(),
+                    next_expected_seq_no,gateway_addr);
 
                 break;
             }
@@ -149,7 +150,8 @@ static std::vector<uint8_t> requester_recv_task(const net::sock_fd & recv_sock_f
                     throw std::runtime_error("request_recv_task local/destination address mismatch\n");
 
                 next_expected_seq_no = net::get_next_expected_seq_no(recv_window, window_start_seq_no);
-                send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, data_packet.get_transport_src(),next_expected_seq_no);
+                send_ack_packet(send_sock_fd,*(sockaddr*)&recv_addr, data_packet.get_transport_src(),
+                    next_expected_seq_no,gateway_addr);
 
                 if (inserted_packet.second == false)
                 {
@@ -261,6 +263,9 @@ int main(int argc, char * argv[])
     auto & recv_sock_fd = recv_fd_addr.first;
     auto & requester_recv_addr = recv_fd_addr.second;
 
+    const sockaddr_in emulator_addr_in = net::get_sockaddr_in_from_hostport(emulator_hostname,emulator_port);
+    const sockaddr emulator_addr = *(sockaddr*)&emulator_addr_in;
+
     // initialize UDP send socket
     const net::sock_fd send_sock_fd(socket(AF_INET, SOCK_DGRAM, 0));
     net::set_buffer_size(send_sock_fd.get());
@@ -290,12 +295,12 @@ int main(int argc, char * argv[])
 
         // dispatch recv thread
         auto recv_thread = std::async(std::launch::async, requester_recv_task, std::ref(recv_sock_fd), *(sockaddr_in*)&requester_recv_addr,
-            std::ref(send_sock_fd), requester_window_size);
+            std::ref(send_sock_fd), std::ref(emulator_addr), requester_window_size);
 
         // dispatch request packet
         TransportPacket request_pkt(net::BASE_PACKET_TYPE::REQUEST, TransportPacket::TRANSPORT_PRIORITY::HIGH, 
             *((sockaddr*)&requester_recv_addr), *ip_addr->ai_addr,requester_window_size);
-        auto bytes_sent = request_pkt.send_packet(send_sock_fd);
+        auto bytes_sent = request_pkt.forward_packet(send_sock_fd,emulator_addr);
 
         std::cerr << "UDP request packet sent. Total bytes sent: " << bytes_sent << "; Dest addr: " << 
             net::sockaddr_to_str(*ip_addr->ai_addr) << '\n';

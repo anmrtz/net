@@ -19,17 +19,17 @@ struct emulator_entry
 };
 using emulator_table = std::vector<emulator_entry>;
 
-struct forwarding_dest
+struct forwarding_hop
 {
-    sockaddr_in dest_addr;
+    sockaddr_in hop_addr;
     uint32_t distance;
 
     std::chrono::milliseconds delay;
     uint8_t loss_probability; // [0,100]
 
-    forwarding_dest(const sockaddr_in & addr, uint32_t distance_ = 0, 
+    forwarding_hop(const sockaddr_in & addr, uint32_t distance_ = 0, 
         const std::chrono::milliseconds & delay_ = std::chrono::milliseconds(0), uint8_t loss_probability_ = 0) :
-        dest_addr(addr), distance(distance_), delay(delay_), loss_probability(loss_probability_)
+        hop_addr(addr), distance(distance_), delay(delay_), loss_probability(loss_probability_)
     {}
 };
 
@@ -48,4 +48,4 @@ const auto sockaddr_in_comp = [](const sockaddr_in & left, const sockaddr_in & r
             return true;
     return false;
 };
-using forwarding_table = std::map<sockaddr_in, forwarding_dest, decltype(sockaddr_in_comp)>; // destination, gateway emulator; process from forwarding_table
+using forwarding_table = std::map<sockaddr_in, forwarding_hop, decltype(sockaddr_in_comp)>; // destination, gateway emulator; process from forwarding_table

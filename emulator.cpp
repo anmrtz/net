@@ -115,7 +115,7 @@ static forwarding_table generate_forwarding_table(const emulator_table & et, con
 
             // delay value is unused for now
             ft.insert(std::make_pair(ee_destination_addr, 
-                forwarding_dest(ee_next_hop_addr, 0, ee.delay, ee.loss_probability)));
+                forwarding_hop(ee_next_hop_addr, 0, ee.delay, ee.loss_probability)));
         }
     }
 
@@ -204,15 +204,24 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
         // else if there is a packet being delayed and the delay is over
         else if (front_packet_being_delayed && std::chrono::system_clock::now() > packet_wake_time)
         {
-            // get packet drop chance
+            // get forwarding hop
             const sockaddr front_dest_addr = outgoing_queue.top().get_transport_dest();
+            const auto & forward_hop = ft.at(*(sockaddr_in*)&front_dest_addr);
 
-            const auto drop_chance = ft.at(*(sockaddr_in*)&front_dest_addr).loss_probability;
+            const auto drop_chance = forward_hop.loss_probability;
             decltype(drop_chance) roll_percentage{random_percent()};
 
             if (roll_percentage >= drop_chance)
+            {
                 // send packet
-                outgoing_queue.top().forward_packet(send_sock_fd,front_dest_addr);
+                const auto & front_packet = outgoing_queue.top();
+
+                std::cout << "Forwarding packet. Origin: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
+                    << "; Destination: " << net::sockaddr_to_str(front_packet.get_transport_dest())
+                    << "; Next-hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr)
+                    << '\n';
+                front_packet.forward_packet(send_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
+            }
             else
                 std::cout << "routing_loop event: packet dropped due to random chance\n";
 

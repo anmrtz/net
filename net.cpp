@@ -96,7 +96,9 @@ std::shared_ptr<addrinfo> hostname_to_ip4(net::hostname host, uint16_t port)
 std::string sockaddr_to_str(const sockaddr & addr)
 {
     sockaddr_in * src_addr_in = (sockaddr_in*)&addr;
-    return std::string(inet_ntoa(src_addr_in->sin_addr));
+    std::stringstream ss;
+    ss << '(' << inet_ntoa(src_addr_in->sin_addr) << ',' << ntohs(src_addr_in->sin_port) << ')';
+    return ss.str();
 }
 
 // ip and port specified in network order
