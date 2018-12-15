@@ -26,6 +26,8 @@ add_executable(sender sender.cpp)
 target_link_libraries(sender net Boost::program_options)
 add_executable(emulator emulator.cpp)
 target_link_libraries(emulator net Boost::program_options)
+add_executable(router router.cpp)
+target_link_libraries(router net Boost::program_options)
 
 add_executable(test_net test_net.cpp)
 target_link_libraries(test_net net gtest_main)
