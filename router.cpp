@@ -12,6 +12,7 @@
 
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
+#include <boost/tokenizer.hpp>
 
 namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
@@ -19,6 +20,16 @@ using TransportPacket = net::TransportPacket;
 using packet_queue = std::queue<TransportPacket>;
 static packet_queue outgoing_queue;
 using topology = int;
+
+struct forwarding_hop
+{
+    sockaddr_in hop_addr;
+    uint32_t cost;
+
+    forwarding_hop(const sockaddr_in & addr, uint32_t cost_) :
+        hop_addr(addr), cost(cost_)
+    {}
+};
 
 const auto sockaddr_in_comp = [](const sockaddr_in & left, const sockaddr_in & right) -> bool
 {
@@ -29,12 +40,27 @@ const auto sockaddr_in_comp = [](const sockaddr_in & left, const sockaddr_in & r
             return true;
     return false;
 };
-using forwarding_table = std::map<sockaddr_in, sockaddr_in, decltype(sockaddr_in_comp)>; // destination, gateway emulator; process from forwarding_table
+using forwarding_table = std::map<sockaddr_in, forwarding_hop, decltype(sockaddr_in_comp)>; // destination, gateway emulator; process from forwarding_table
 
 topology generate_topology(std::iostream & stream)
 {
+    topology top;
+    std::string line;
 
-    return {};
+    while(std::getline(stream,line))
+    {
+
+        std::stringstream ss(line);
+        try
+        {
+        }
+        catch (std::exception & e)
+        {
+            throw std::runtime_error("generate_topology error. Could not parse line: " + line + "; " + e.what() + "\n");
+        }
+
+    }
+    return top;
 }
 
 void print_topology(const topology & top, std::ostream & stream)
@@ -90,12 +116,12 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
                 << static_cast<std::underlying_type<net::BASE_PACKET_TYPE>::type>(front_packet.get_base_type())
                 << "; Orig: " << net::sockaddr_to_str(front_packet.get_transport_src()) 
                 << "; Dest: " << net::sockaddr_to_str(front_packet.get_transport_dest())
-                << "; Hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop)
+                << "; Hop: " << net::sockaddr_to_str(*(sockaddr*)&forward_hop.hop_addr)
                 << "; Time (ms): " << std::chrono::duration_cast<std::chrono::milliseconds>(send_time).count()
                 << "; SN: " << front_packet.get_seq_no()
                 << '\n';
 #endif
-            front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop);
+            front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
             outgoing_queue.pop();
         }
     }
