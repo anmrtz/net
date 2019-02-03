@@ -13,6 +13,11 @@
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/tokenizer.hpp>
+#include <boost/algorithm/string.hpp>
+
+#include <boost/graph/dijkstra_shortest_paths.hpp>
+#include <boost/graph/adjacency_list.hpp>
+#include <boost/graph/graph_traits.hpp>
 
 namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
@@ -20,6 +25,23 @@ using TransportPacket = net::TransportPacket;
 using packet_queue = std::queue<TransportPacket>;
 static packet_queue outgoing_queue;
 using topology = int;
+
+using namespace boost;
+
+// Graph stuff
+typedef boost::adjacency_list < listS, vecS, undirectedS, no_property, boost::property < edge_weight_t, int > > graph_t;
+typedef boost::graph_traits < graph_t >::vertex_descriptor vtx_desc;
+typedef boost::graph_traits < graph_t >::edge_descriptor edge_desc;
+typedef std::pair<int, int> edge_t;
+
+
+// base topology of all known nodes (also contains link weights) -- adjacency list
+
+// current node-specific topology (nodes of base topology may or may not be "active")
+
+// dijkstra will generate (A,B,C)->(A,B,C) routes for the current node
+
+// link states -> shortest paths -> forwarding table
 
 struct forwarding_hop
 {
@@ -31,6 +53,12 @@ struct forwarding_hop
     {}
 };
 
+bool operator==(const sockaddr_in & left, const sockaddr_in & right)
+{
+    return left.sin_family == right.sin_family &&
+        left.sin_addr.s_addr == right.sin_addr.s_addr &&
+        left.sin_port == right.sin_port;
+}
 const auto sockaddr_in_comp = [](const sockaddr_in & left, const sockaddr_in & right) -> bool
 {
     if (left.sin_addr.s_addr < right.sin_addr.s_addr)
@@ -41,29 +69,67 @@ const auto sockaddr_in_comp = [](const sockaddr_in & left, const sockaddr_in & r
     return false;
 };
 using forwarding_table = std::map<sockaddr_in, forwarding_hop, decltype(sockaddr_in_comp)>; // destination, gateway emulator; process from forwarding_table
+using topology_nodes = std::map<sockaddr_in, int, decltype(sockaddr_in_comp)>;
+using topology_links = std::multimap<sockaddr_in, sockaddr_in, decltype(sockaddr_in_comp)>;
+
+topology_nodes top_nodes(sockaddr_in_comp);
+topology_links top_links(sockaddr_in_comp);
 
 topology generate_topology(std::iostream & stream)
 {
     topology top;
+
+    // get vertices
     std::string line;
+    uint32_t curr_node_id{0};
 
     while(std::getline(stream,line))
     {
-
         std::stringstream ss(line);
         try
         {
+            std::string block;
+
+            bool first_node_found{false};
+            sockaddr_in first_node_addr;
+            while (ss >> block)
+            {
+                std::vector<std::string> ip_port;
+                boost::split(ip_port,block,boost::is_any_of(","));
+                if (ip_port.size() != 2)
+                    throw std::runtime_error("Could not parse an ip/port from block: " + block);
+
+                sockaddr_in block_addr = net::get_sockaddr_in_from_hostport(ip_port.at(0),boost::lexical_cast<uint16_t>(ip_port.at(1)));
+                if (!first_node_found)
+                    first_node_addr = block_addr;
+                
+                if (!top_nodes.count(block_addr))
+                    top_nodes.insert(std::make_pair(block_addr,curr_node_id++));
+
+                if (first_node_found)
+                {
+                    if (first_node_addr == block_addr)
+                        throw std::runtime_error("Topology file has self-directed edge");
+
+                    top_links.insert(std::make_pair(first_node_addr,block_addr));
+                }
+
+                first_node_found = true;
+            }
+
+            if (!first_node_found)
+                throw std::runtime_error("No head node found");
         }
         catch (std::exception & e)
         {
             throw std::runtime_error("generate_topology error. Could not parse line: " + line + "; " + e.what() + "\n");
         }
-
     }
+
     return top;
 }
 
-void print_topology(const topology & top, std::ostream & stream)
+static void print_topology(const topology & top, std::ostream & stream)
 {
 
 }
