@@ -69,7 +69,8 @@ enum class BASE_PACKET_TYPE : uint8_t
     REQUEST = 'R',
     DATA = 'D',
     END = 'E',
-    ACK = 'A'
+    ACK = 'A',
+    LINK = 'S' // link-state packet
 };
 
 // base header fields stored in network order

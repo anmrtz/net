@@ -28,12 +28,19 @@ static packet_queue outgoing_queue;
 
 using namespace boost;
 
+// Delay between sending node-active notifications to adjacent routers
+static constexpr std::chrono::milliseconds NODE_HEARTBEAT_INTERVAL{200};
+static_assert(NODE_HEARTBEAT_INTERVAL.count() >= 0, "NODE_HEARTBEAT_INTERVAL must be >= 0\n");
+
+// Delay before pruning inactive nodes from the local topology state
+static constexpr std::chrono::milliseconds NODE_EXPIRATION_INTERVAL{500};
+static_assert(NODE_EXPIRATION_INTERVAL.count() >= 0, "NODE_EXPIRATION_INTERVAL must be >= 0\n");
+
 // Graph stuff
 struct vtx_prop
 {
-    sockaddr_in node_addr;
+    sockaddr_in node_addr; // store the node address of each vertex
 };
-
 typedef boost::adjacency_list < setS, vecS, undirectedS, vtx_prop, boost::property < edge_weight_t, int > > topology_t;
 typedef boost::graph_traits<topology_t>::edge_parallel_category disallow_parallel_edge_tag;
 typedef boost::graph_traits < topology_t >::vertex_descriptor vtx_desc;
@@ -72,8 +79,17 @@ using topology_links = std::multimap<sockaddr_in, sockaddr_in, decltype(sockaddr
 
 topology_nodes top_nodes(sockaddr_in_comp);
 topology_links top_links(sockaddr_in_comp);
-topology_nodes live_nodes(sockaddr_in_comp);
+
 sockaddr_in this_node_addr;
+std::set<sockaddr_in> adjacent_nodes;
+
+struct node_state
+{
+    uint32_t last_recv_seq_no{0};
+    std::chrono::system_clock::time_point last_heartbeat_time;
+    bool is_active{false};
+};
+std::map<sockaddr_in, node_state > node_states;
 
 topology_t generate_topology(std::iostream & stream)
 {
@@ -130,8 +146,6 @@ topology_t generate_topology(std::iostream & stream)
         auto vtx = boost::add_vertex(top);
         top[vtx].node_addr = node.first;
         node.second = vtx;
-
-        live_nodes.insert(std::make_pair(node.first,1));
     }
     for (const auto & link : top_links)
     {
@@ -190,6 +204,31 @@ static void print_topology(const topology_t & top, std::ostream & stream)
     write_graphviz (stream, top, make_label_writer(&node_names[0]));
 }
 
+// update the known topology based on the received node state message (or expiration of node state)
+// update the forwarding table based on the changed topology
+static void process_node_state(const sockaddr & src_addr, uint32_t seq_no)
+{
+
+}
+
+// periodically check to see if nodes have expired due to lack of recent heartbeat packets from those nodes
+static void node_timeout_loop()
+{
+    // do not check self!!!
+
+}
+
+// periodically send node heartbeats to adjacent nodes
+static void send_node_update_loop(const net::sock_fd & recv_sock_fd)
+{
+    while (true)
+    {
+        std::this_thread::sleep_for(NODE_HEARTBEAT_INTERVAL);
+
+        // mutex for socket
+    }
+}
+
 static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_sock_fd, const sockaddr & router_addr,
     const uint32_t queue_max_size)
 {
@@ -207,13 +246,19 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
         memset(&src_addr, 0, sizeof(src_addr));
         socklen_t src_addr_len{sizeof(src_addr)};
 
+        // mutex for socket
         int recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
         // if packet has been received...
         if (recv_len > 0)
         {
             TransportPacket recv_packet(recv_buf.data(), recv_len);
 
-            // Future plans - check if this is a routing packet
+            // Check if this is a node-state packet
+            if (recv_packet.get_base_type() == net::BASE_PACKET_TYPE::LINK)
+            {
+                process_node_state(recv_packet.get_transport_src(), recv_packet.get_seq_no());
+                continue;
+            }
 
             // else route it
             // first make sure the packet has a valid next-hop for its destination
@@ -243,6 +288,7 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
                 << "; SN: " << front_packet.get_seq_no()
                 << '\n';
 #endif
+            // mutex for socket
             front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
             outgoing_queue.pop();
         }
