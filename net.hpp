@@ -164,6 +164,8 @@ std::shared_ptr<addrinfo> hostname_to_ip4(net::hostname host, uint16_t port);
 
 std::string sockaddr_to_str(const sockaddr & addr);
 
+std::string sockaddr_to_str(const sockaddr_in & addr);
+
 uint32_t get_next_expected_seq_no(const std::set<TransportPacket> & window, const uint32_t window_start_seq_no);
 
 std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int buffer_size = DEFAULT_BUFFER_SIZE);
@@ -171,3 +173,5 @@ std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int
 sockaddr_in get_sockaddr_in_from_hostport(const std::string & hostname, const uint16_t port);
 
 }
+
+std::ostream & operator<<(std::ostream & stream, const sockaddr_in & addr);

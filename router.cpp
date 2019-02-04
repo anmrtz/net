@@ -18,30 +18,28 @@
 #include <boost/graph/dijkstra_shortest_paths.hpp>
 #include <boost/graph/adjacency_list.hpp>
 #include <boost/graph/graph_traits.hpp>
+#include <boost/graph/graphviz.hpp>
 
 namespace po = boost::program_options;
 using TransportPacket = net::TransportPacket;
 
 using packet_queue = std::queue<TransportPacket>;
 static packet_queue outgoing_queue;
-using topology = int;
 
 using namespace boost;
 
 // Graph stuff
-typedef boost::adjacency_list < listS, vecS, undirectedS, no_property, boost::property < edge_weight_t, int > > graph_t;
-typedef boost::graph_traits < graph_t >::vertex_descriptor vtx_desc;
-typedef boost::graph_traits < graph_t >::edge_descriptor edge_desc;
+struct vtx_prop
+{
+    sockaddr_in node_addr;
+};
+
+typedef boost::adjacency_list < setS, vecS, undirectedS, vtx_prop, boost::property < edge_weight_t, int > > topology_t;
+typedef boost::graph_traits<topology_t>::edge_parallel_category disallow_parallel_edge_tag;
+typedef boost::graph_traits < topology_t >::vertex_descriptor vtx_desc;
+typedef boost::graph_traits < topology_t >::edge_descriptor edge_desc;
 typedef std::pair<int, int> edge_t;
-
-
-// base topology of all known nodes (also contains link weights) -- adjacency list
-
-// current node-specific topology (nodes of base topology may or may not be "active")
-
-// dijkstra will generate (A,B,C)->(A,B,C) routes for the current node
-
-// link states -> shortest paths -> forwarding table
+topology_t top;
 
 struct forwarding_hop
 {
@@ -74,14 +72,15 @@ using topology_links = std::multimap<sockaddr_in, sockaddr_in, decltype(sockaddr
 
 topology_nodes top_nodes(sockaddr_in_comp);
 topology_links top_links(sockaddr_in_comp);
+topology_nodes live_nodes(sockaddr_in_comp);
+sockaddr_in this_node_addr;
 
-topology generate_topology(std::iostream & stream)
+topology_t generate_topology(std::iostream & stream)
 {
-    topology top;
+    topology_t top;
 
     // get vertices
     std::string line;
-    uint32_t curr_node_id{0};
 
     while(std::getline(stream,line))
     {
@@ -104,7 +103,7 @@ topology generate_topology(std::iostream & stream)
                     first_node_addr = block_addr;
                 
                 if (!top_nodes.count(block_addr))
-                    top_nodes.insert(std::make_pair(block_addr,curr_node_id++));
+                    top_nodes.insert(std::make_pair(block_addr,-1));
 
                 if (first_node_found)
                 {
@@ -126,12 +125,69 @@ topology generate_topology(std::iostream & stream)
         }
     }
 
+    for (auto & node : top_nodes)
+    {
+        auto vtx = boost::add_vertex(top);
+        top[vtx].node_addr = node.first;
+        node.second = vtx;
+
+        live_nodes.insert(std::make_pair(node.first,1));
+    }
+    for (const auto & link : top_links)
+    {
+        boost::add_edge(top_nodes.at(link.first),top_nodes.at(link.second),1,top);
+    }
+
+    // debug graph data
+    typedef boost::graph_traits<topology_t>::vertex_iterator VItr;
+    VItr vitr, vend;
+    boost::tie( vitr, vend) = boost::vertices(top);
+    std::vector<std::string> node_names;
+    for (; vitr != vend; vitr++)
+    {
+        std::string node_name = net::sockaddr_to_str(top[*vitr].node_addr);
+        node_names.push_back(node_name);
+        std::cout << "Vertex: " << node_name << '\n';
+    }
+
+    auto EdgeWeightMap = get(boost::edge_weight_t(), top);
+    typedef boost::graph_traits<topology_t>::edge_iterator EItr;
+    EItr eitr, eend;
+    boost::tie( eitr, eend) = boost::edges(top);
+    for (; eitr != eend; eitr++)
+    {
+        std::cout << "Edge: " << EdgeWeightMap[*eitr] << '\n';
+    }
+
+    std::ofstream dotfile("top.dot");    
+    write_graphviz (dotfile, top, make_label_writer(&node_names[0])); // output topology to dot file
+
+    // calculate sample shortest path data
+    std::vector<vtx_desc> parents(boost::num_vertices(top));
+    std::vector<int> distances(boost::num_vertices(top));
+    boost::dijkstra_shortest_paths(top,top_nodes.begin()->second, boost::predecessor_map(&parents[0]).distance_map(&distances[0]));
+
+    // Output results
+    std::cout << "Dijkstra output from node " << top_nodes.begin()->first << " :\n";
+    for (boost::tie(vitr, vend) = boost::vertices(top); vitr != vend; ++vitr) 
+    {
+        std::string node_name = net::sockaddr_to_str(top[*vitr].node_addr);
+
+        std::cout << "distance(" << node_name << ") = " << distances[*vitr] << ", ";
+        std::cout << "parent(" << node_name << ") = " << top[parents[*vitr]].node_addr << '\n';
+    }
+    std::cout << '\n';
+
     return top;
 }
 
-static void print_topology(const topology & top, std::ostream & stream)
+static void print_topology(const topology_t & top, std::ostream & stream)
 {
+    std::vector<std::string> node_names;
+    for (const auto & node : top_nodes)
+        node_names.push_back(net::sockaddr_to_str(node.first));
 
+    write_graphviz (stream, top, make_label_writer(&node_names[0]));
 }
 
 static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_sock_fd, const sockaddr & router_addr,
@@ -205,7 +261,7 @@ int main(int argc, char * argv[])
             desc.add_options()
                 (",p", po::value<decltype(emulator_port)>(&emulator_port)->required(), "emulator port")
                 (",f", po::value<decltype(topology_filename)>(&topology_filename)->required(), 
-                    "topology filename");
+                    "topology_t filename");
 
             po::variables_map vm;
 
@@ -236,7 +292,7 @@ int main(int argc, char * argv[])
 
         const auto recv_fd_addr = net::bind_recv_local(emulator_port);
         auto top = generate_topology(top_file);
-        std::cout << "\nGenerated forwarding table for this node:\n"; print_topology(top,std::cout);
+        std::cout << "\nTopology for this node:\n"; print_topology(top,std::cout);
 
         //routing_loop(top,recv_fd_addr.first,recv_fd_addr.second);
     }

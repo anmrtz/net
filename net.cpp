@@ -96,6 +96,12 @@ std::shared_ptr<addrinfo> hostname_to_ip4(net::hostname host, uint16_t port)
 std::string sockaddr_to_str(const sockaddr & addr)
 {
     sockaddr_in * src_addr_in = (sockaddr_in*)&addr;
+    return sockaddr_to_str(*src_addr_in);
+}
+
+std::string sockaddr_to_str(const sockaddr_in & addr)
+{
+    sockaddr_in * src_addr_in = (sockaddr_in*)&addr;
     std::stringstream ss;
     ss << '(' << inet_ntoa(src_addr_in->sin_addr) << ',' << ntohs(src_addr_in->sin_port) << ')';
     return ss.str();
@@ -408,4 +414,10 @@ std::pair<net::sock_fd, sockaddr> bind_recv_local(const uint16_t port, const int
     return std::make_pair(sock_fd(recv_sock_fd), addr);
 }
 
+}
+
+std::ostream & operator<<(std::ostream & stream, const sockaddr_in & addr)
+{
+    stream << net::sockaddr_to_str(addr);
+    return stream;
 }
