@@ -9,10 +9,10 @@
 #include <queue>
 #include <sstream>
 #include <thread>
+#include <mutex>
 
 #include <boost/program_options.hpp>
 #include <boost/lexical_cast.hpp>
-#include <boost/tokenizer.hpp>
 #include <boost/algorithm/string.hpp>
 
 #include <boost/graph/dijkstra_shortest_paths.hpp>
@@ -46,7 +46,6 @@ typedef boost::graph_traits<topology_t>::edge_parallel_category disallow_paralle
 typedef boost::graph_traits < topology_t >::vertex_descriptor vtx_desc;
 typedef boost::graph_traits < topology_t >::edge_descriptor edge_desc;
 typedef std::pair<int, int> edge_t;
-topology_t top;
 
 struct forwarding_hop
 {
@@ -77,12 +76,14 @@ using forwarding_table = std::map<sockaddr_in, forwarding_hop, decltype(sockaddr
 using topology_nodes = std::map<sockaddr_in, int, decltype(sockaddr_in_comp)>;
 using topology_links = std::multimap<sockaddr_in, sockaddr_in, decltype(sockaddr_in_comp)>;
 
+// topology and this-node reference states
 topology_nodes top_nodes(sockaddr_in_comp);
 topology_links top_links(sockaddr_in_comp);
-
 sockaddr_in this_node_addr;
 std::set<sockaddr_in> adjacent_nodes;
+topology_t top; // const topology graph
 
+// running topology states
 struct node_state
 {
     uint32_t last_recv_seq_no{0};
@@ -90,6 +91,14 @@ struct node_state
     bool is_active{false};
 };
 std::map<sockaddr_in, node_state > node_states;
+std::mutex node_state_mtx, socket_mtx;
+
+std::set<sockaddr_in> get_adj_nodes(const topology_t & top, const sockaddr_in & node)
+{
+    std::set<sockaddr_in> an;
+
+
+}
 
 topology_t generate_topology(std::iostream & stream)
 {
@@ -206,6 +215,7 @@ static void print_topology(const topology_t & top, std::ostream & stream)
 
 // update the known topology based on the received node state message (or expiration of node state)
 // update the forwarding table based on the changed topology
+// forward node state packets to neighbors
 static void process_node_state(const sockaddr & src_addr, uint32_t seq_no)
 {
 
@@ -221,11 +231,21 @@ static void node_timeout_loop()
 // periodically send node heartbeats to adjacent nodes
 static void send_node_update_loop(const net::sock_fd & recv_sock_fd)
 {
+    static uint32_t curr_seq_no{0};
+
+    net::TransportPacket heartbeat(net::BASE_PACKET_TYPE::LINK, net::TransportPacket::TRANSPORT_PRIORITY::HIGH, *(sockaddr*)&this_node_addr, 
+        {0}, curr_seq_no); // These are intended as "broadcast" messages and therefore do not have a specific dest address
+
     while (true)
     {
         std::this_thread::sleep_for(NODE_HEARTBEAT_INTERVAL);
 
         // mutex for socket
+        {
+            std::lock_guard<std::mutex> lock(socket_mtx);
+
+        }
+
     }
 }
 
@@ -247,7 +267,11 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
         socklen_t src_addr_len{sizeof(src_addr)};
 
         // mutex for socket
-        int recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
+        int recv_len{0};
+        {
+            std::lock_guard<std::mutex> lock(socket_mtx);
+            recv_len = recvfrom(recv_sock_fd.get(), recv_buf.data(), recv_buf.size(), 0, &src_addr, &src_addr_len);
+        }
         // if packet has been received...
         if (recv_len > 0)
         {
@@ -288,8 +312,10 @@ static void routing_loop(const forwarding_table & ft, const net::sock_fd & recv_
                 << "; SN: " << front_packet.get_seq_no()
                 << '\n';
 #endif
-            // mutex for socket
-            front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
+            {
+                std::lock_guard<std::mutex> lock(socket_mtx);
+                front_packet.forward_packet(recv_sock_fd,*(sockaddr*)&forward_hop.hop_addr);
+            }    
             outgoing_queue.pop();
         }
     }

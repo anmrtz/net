@@ -120,8 +120,8 @@ class TransportPacket
     TransportPacket(BASE_PACKET_TYPE pt, TRANSPORT_PRIORITY tp, const sockaddr & src, const sockaddr & dest, 
         uint32_t seq_no = 0, const std::vector<uint8_t> & payload = {});
 
-    std::size_t forward_packet(const sock_fd & fd, const sockaddr & dest_ip_addr) const;
-    std::size_t send_packet(const sock_fd & fd) const;
+    std::size_t forward_packet(const sock_fd & fd, const sockaddr & dest_ip_addr) const; // forward the packet to a specific destination
+    std::size_t send_packet(const sock_fd & fd) const; // send packet directly to the destination specified in the transport_dest field
 
     sockaddr get_transport_src() const;
     sockaddr get_transport_dest() const;
